@@ -1,3 +1,5 @@
+# -*- coding: utf-8 -*-
+
 LEAGUES_TO_PATH = {
     'nba': 'http://www.basketball-reference.com/leagues/NBA_{0}_games.html',
     'acb': 'http://www.basketball-reference.com/euro/spain-liga-acb/{0}-schedule.html',
