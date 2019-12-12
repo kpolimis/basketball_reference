@@ -1,3 +1,4 @@
+# -*- coding: utf-8 -*-
 import datetime
 import signal
 from functools import wraps
@@ -5,9 +6,19 @@ import wikipedia
 import requests
 from bs4 import BeautifulSoup
 from Levenshtein import ratio
-
+import socket
 from constants import MONTHS
+from unidecode import unidecode
 
+import bs4
+import json
+import logging, logging.config
+with open('logging.json', 'r') as f:
+    logging.config.dictConfig(json.load(f))
+logger = logging.getLogger('stringer-bell')
+
+def remove_non_ascii(text):
+    return unidecode(unicode(text, encoding = "utf-8"))
 
 class NoTeamException(Exception):
     pass
@@ -67,7 +78,7 @@ class WikipediaPlayer(Wikipedia):
 
         try:
             self.page = wikipedia.page(player)
-            self.soup = BeautifulSoup(self.page.html())
+            self.soup = BeautifulSoup(self.page.html(), features="html.parser")
         except wikipedia.exceptions.DisambiguationError as e:
             self._get_correct_page(e.options, team)
         self._gen_table()
@@ -85,7 +96,7 @@ class WikipediaPlayer(Wikipedia):
                     wiki_player = wikipedia.page(option)
                 except:
                     continue
-                self.soup = BeautifulSoup(wiki_player.html())
+                self.soup = BeautifulSoup(wiki_player.html(), features="html.parser")
                 if team not in str(self.soup):
                     continue
                 self._gen_table()
@@ -132,13 +143,15 @@ def timeout_handler(signum, frame):
 def timeout(func):
     @wraps(func)
     def wrapper(*args, **kwargs):
-        signal.alarm(10000)
+        # signal.alarm(10000)
+        socket.setdefaulttimeout(10000)
         try:
             func(*args, **kwargs)
         except TimeoutException:
             raise TimeoutException
         finally:
-            signal.alarm(0)
+            socket.setdefaulttimeout(0)
+            # signal.alarm(0)
     return wrapper
 
 
@@ -157,8 +170,12 @@ def convert_to_min(minutes):
 
 
 def gen_derived_var(stat1, stat2):
-    if stat2 > 0:
-        rv = stat1 / stat2
+    if type(stat2) == bs4.element.Tag:
+        stat2 = float(stat2.getText())
+    # logger.info("stat1 is {0} and stat2 is {1}".format(stat1, stat2))
+    # logger.info("stat1 type is {0} and stat2 type is {1}".format(type(stat1), type(stat2)))
+    if float(stat2) > 0 and float(stat1) > 0:
+        rv = float(stat1) / float(stat2)
     else:
         rv = None
     return rv

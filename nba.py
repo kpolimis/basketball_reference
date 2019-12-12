@@ -1,3 +1,4 @@
+# -*- coding: utf-8 -*-
 import json
 import logging, logging.config
 
@@ -28,11 +29,12 @@ class NbaBRefMatch(BRefMatch):
     def parse_teams(self, team, table, plus_minus):
         metrics = [metric.text for metric in
                    table.find('thead').find_all('tr')[1].find_all('th')[2:]]
-        stats = table.find('tfoot').find_all('td')[1:]
+        stats = [td.getText() for td in table.find('tfoot').find_all('td')[1:]]
         if not plus_minus and '+/-' in metrics:
             stats.pop(-1)
             metrics.pop(-1)
-        stats = [float(s.text) for s in stats]
+        stats = [stat for stat in stats if stat is not u'']
+        stats = [float(s) if str(s).replace('.','',1).isdigit()==True else s for s in stats]
         self.match_[team]['totals'].update(dict(zip(metrics, stats)))
 
     def parse_players(self, team, table):
@@ -48,7 +50,9 @@ class NbaBRefMatch(BRefMatch):
                 if metric == 'MP':
                     stat = stat if stat not in [None, 'Did Not Play', 'Player Suspended'] else '0.0'
                     stat = convert_to_min(stat)
-                stat = float(stat) if stat else None
+                if type(stat)==float or type(stat)==int:                    
+                    stat = float(stat) if stat else None
+                
                 self.match_[team]['players'][name][metric] = stat
 
     def _gen_scoring(self):
@@ -68,7 +72,8 @@ class NbaBRefMatch(BRefMatch):
 
         src = str(self.soup_.find('div', {'id': 'all_line_score'}))
         src = src.replace('<!--', '')
-        scoring_table = BeautifulSoup(src).find('table', {'id': 'line_score'})
+        scoring_table = BeautifulSoup(src, features="html.parser").find('table', {'id': 'line_score'})
+        logger.info("scoring table: {0}".format(scoring_table))
         quarters_score = gen_scoring(scoring_table)
         for team, scores in quarters_score.items():
             self.match_[team]['scores'] = scores
@@ -105,7 +110,7 @@ class NbaBRefSeason(BRefSeason):
                     logger.info("Timeout. Couldn't crawl match {0}. Retrying {1}/5".format(code, j+1))
                     continue
                 except:
-                    logger.exception("Couldn't crawl match{0}".format(code))
+                    logger.exception("Couldn't crawl match: {0}".format(code))
                     break
 
     def _gen_matches_codes(self):
@@ -121,7 +126,7 @@ class NbaBRefSeason(BRefSeason):
 
     def _gen_month_codes(self, url):
         rv = requests.get(url)
-        soup = BeautifulSoup(rv.text)
+        soup = BeautifulSoup(rv.text, features="html.parser")
         seasons = soup.find_all('table', {'class': 'stats_table'})
         if len(seasons) == 2:
             reg_season, post_season = seasons

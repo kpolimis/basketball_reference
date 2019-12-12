@@ -1,3 +1,5 @@
+# -*- coding: utf-8 -*-
+import re
 import os
 from collections import defaultdict
 from datetime import datetime
@@ -12,13 +14,13 @@ from Levenshtein import ratio
 
 from constants import PLS_HEADERS, USER_AGENTS, POSITIONS
 from utils import (WikipediaPlayer, timeout_handler, gen_date, feets_to_meters, timeout,
-                   gen_derived_var, gen_date_with_mins)
+                   gen_derived_var, gen_date_with_mins, remove_non_ascii)
 
 with open('logging.json', 'r') as f:
     logging.config.dictConfig(json.load(f))
 logger = logging.getLogger('stringer-bell')
 
-signal.signal(signal.SIGALRM, timeout_handler)
+# signal.signal(signal.SIGALRM, timeout_handler)
 
 CACHE_PLAYERS_BASIC_INFO = {}
 CACHE_PLAYERS_RATIO = {}
@@ -39,14 +41,15 @@ class PlayerBasicInfo():
             # see if it's on roster under another name. if not, download from wikipedia
             name = CACHE_PLAYERS_RATIO.get(self.name)
             if name:
-                player = self.team_info.players_[name]
+                player = self.team_info.players_[re.sub(r'[^\x00-\x7F]','',name).decode('utf-8','ignore').strip()]
             else:
                 name = self._get_most_suitable_player()
                 if name:
-                    logger.debug('{0} was associated with {1} from roster'.format(self.name, name))
+                    logger.debug('{0} was associated with {1} from roster'.format(re.sub(r'[^\x00-\x7F]','',self.name).decode('utf-8','ignore').strip(), name))
                     CACHE_PLAYERS_RATIO[self.name] = name
                     player = self.team_info.players_[name]
                 else:
+                    self.name = re.sub(r'[^\x00-\x7F]','',self.name).decode('utf-8','ignore').strip()
                     logger.debug('No association for {0}. Wikipedia will be used.'.format(self.name))
                     player = self._player_basic_info_from_wikipedia()
         return player
@@ -70,34 +73,47 @@ class PlayerBasicInfo():
         """
         player = CACHE_PLAYERS_BASIC_INFO.get(self.name)
         if player:
+            logger.info("cached player data for {}: {}".format(self.name, player))
             return player
+        try:
+            self.player_wiki_ = WikipediaPlayer(self.name, self.team_info.name)
+            height = self._get_height()
+            weight = self._get_weight()
+            logger.info("player career: {0}".format(self.player_wiki_.playing_career.replace('\n', '')))
+            start, end = self.player_wiki_.playing_career.replace('\n', '').split('-')
+            if end == 'present':
+                exp = datetime.now().year - int(start)
+            else:
+                exp = int(end) - int(start)
 
-        self.player_wiki_ = WikipediaPlayer(self.name, self.team_info.name)
-        height = self._get_height()
-        weight = self._get_weight()
-        start, end = self.player_wiki_.playing_career.replace('\n', '').split('–')
-        if end == 'present':
-            exp = datetime.now().year - int(start)
-        else:
-            exp = int(end) - int(start)
+            player = {
+                'position': POSITIONS[self.player_wiki_.position.split(' / ')[0]],
+                'birth_date': self.player_wiki_.born[1:11],
+                'height': height if height else None,
+                'weight': weight if weight else None,
+                'experience': exp if exp else None,
+            }
 
-        player = {
-            'position': POSITIONS[self.player_wiki_.position.split(' / ')[0]],
-            'birth_date': self.player_wiki_.born[1:11],
-            'height': height if height else None,
-            'weight': weight if weight else None,
-            'experience': exp if exp else None,
-        }
+            CACHE_PLAYERS_BASIC_INFO[self.name] = player
+        except:
+            player = {
+                'position': None,
+                'birth_date': None,
+                'height': None,
+                'weight': None,
+                'experience': None,
+            }
 
-        CACHE_PLAYERS_BASIC_INFO[self.name] = player
         return player
 
     def _get_height(self):
         h = self.player_wiki_.listed_height
-        if h.index('m') < h.index('ft'):
-            height = float(h[0:h.index('m')])
-        else:
-            height = float(h[h.index('(')+1:h.index('m')])
+        height = 0.0
+        if h:        
+            if h.index('m') < h.index('ft'):
+                height = float(h[0:h.index('m')])
+            else:
+                height = float(h[h.index('(')+1:h.index('m')])
         return height
 
     def _get_weight(self):
@@ -118,7 +134,7 @@ class BRefTeam():
         self.name = name
         self.page = page
         rv = requests.get('http://www.basketball-reference.com{0}'.format(page))
-        self.soup = BeautifulSoup(rv.text)
+        self.soup = BeautifulSoup(rv.text, features="html.parser")
 
     def gen_players_info(self):
         team = self.soup.find('div', {'id': 'div_roster'})
@@ -174,9 +190,10 @@ class BRefMatch:
         generate all stats for a nba match
         """
         match_url = self.uri_base.format(self.code)
+        logger.info("match url: {0}".format(match_url))
         headers = {'User-agent': random.choice(USER_AGENTS)}
         rv = requests.get(match_url, headers=headers)
-        self.soup_ = BeautifulSoup(rv.text)
+        self.soup_ = BeautifulSoup(rv.text, features="html.parser")
 
         self.match_ = defaultdict(dict)
         self._gen_teams_stats()
@@ -203,8 +220,10 @@ class BRefMatch:
 
         self._gen_derived_stats()
 
-        self.match_['home']['totals']['+/-'] = self.match_['home']['totals']['PTS'] - self.match_['away']['totals']['PTS']
-        self.match_['away']['totals']['+/-'] = self.match_['away']['totals']['PTS'] - self.match_['home']['totals']['PTS']
+        # self.match_['home']['totals']['+/-'] = self.match_['home']['totals']['PTS'] - self.match_['away']['totals']['PTS']
+        # self.match_['away']['totals']['+/-'] = self.match_['away']['totals']['PTS'] - self.match_['home']['totals']['PTS']
+        # self.match_['home']['totals']['+/-'] = float(self.match_['home']['totals']['PTS']) - float(self.match_['away']['totals']['PTS'])
+        # self.match_['away']['totals']['+/-'] = float(self.match_['away']['totals']['PTS']) - float(self.match_['home']['totals']['PTS'])
 
     def _gen_match_basic_info(self):
         """
@@ -276,28 +295,97 @@ class BRefMatch:
             team_stats = self.match_[team]['totals']
 
             def add_derivated_stats_to_dict(d, type_):
-                d['FG%'] = gen_derived_var(d['FG'], d['FGA'])
-                d['FT%'] = gen_derived_var(d['FT'], d['FTA'])
-                d['3P%'] = gen_derived_var(d['3P'], d['3PA'])
-                d['eFG%'] = gen_derived_var((d['FG'] + 0.5 * d['3P']), d['FGA'])
-                d['TSA'] = d['FGA'] + 0.44 * d['FTA']
-                d['TS%'] = gen_derived_var(d['PTS'], 2*d['TSA'])
-                d['3PAr'] = gen_derived_var(d['3PA'], d['FGA'])
-                d['FTAr'] = gen_derived_var(d['FTA'], d['FGA'])
-                d['2P'] = d['FG'] - d['3P']
-                d['2PA'] = d['FGA'] - d['3PA']
-                d['2P%'] = gen_derived_var(d['2P'], d['2PA'])
-                d['2PAr'] = gen_derived_var(d['2PA'], d['FGA'])
-                d['DRB'] = d['TRB'] - d['ORB']
-                d['ORBr'] = gen_derived_var(d['ORB'], d['TRB'])
-                d['DRBr'] = gen_derived_var(d['DRB'], d['TRB'])
-                d['AST/TOV'] = gen_derived_var(d['AST'], d['TOV'])
-                d['STL/TOV'] = gen_derived_var(d['STL'], d['TOV'])
-                d['FIC'] = (d['PTS'] + d['ORB'] + 0.75 * d['DRB'] + d['AST'] + d['STL'] +
-                            d['BLK'] - 0.75 * d['FGA'] - 0.375 * d['FTA'] - d['TOV'] - 0.5 * d['PF'])
-                d['FT/FGA'] = gen_derived_var(d['FT'], d['FGA'])
+                try:
+                    d = {k:float(v) for(k,v) in d.items() if str(v).replace('.','',1).isdigit()==True and v is not None}
+                except:
+                    d = d  
+                # logger.info('d is {0} and type for d {1}'.format(d, type(d)))
+                # if d.get("FG"):
+                #     logger.info('d["FG"] is {0} and type for d["FG"] {1}'.format(d["FG"], type(d["FG"])))
+                # if d.get("3P"):
+                #     logger.info('d["3P"] is {0} and type for d["3P"] {1}'.format(d["3P"], type(d["3P"])))
 
-                d['HOB'] = gen_derived_var(d['FG'] + d['AST'], team_stats['FG'])
+                d['FG%'] = 0.0
+                d['FT%'] = 0.0
+                d['3P%'] = 0.0
+                # d['eFG%'] = 0.0
+                # d['TSA'] = 0.0
+                # d['TS%'] = 0.0
+                d['3PAr'] = 0.0
+                d['FTAr'] = 0.0
+                d['2P'] = 0.0
+                d['2PA'] = 0.0
+                d['2P%'] = 0.0
+                d['2PAr'] = 0.0
+                d['DRB'] = 0.0
+                d['ORBr'] = 0.0
+                d['DRBr'] = 0.0
+                d['AST/TOV'] = 0.0
+                d['STL/TOV'] = 0.0
+                # d['FIC'] = 0.0
+                d['FT/FGA'] = 0.0
+                # d['HOB'] = 0.0
+
+                d.pop('+/-', None)
+                
+                if d.get('AST'):
+                    d['AST'] = float(d.get('AST'))
+                if d.get('DRB'):
+                    d['DRB'] = float(d.get('DRB'))
+                if d.get('ORB'):
+                    d['ORB'] = float(d.get('ORB'))
+                if d.get('TRB'):
+                    d['TRB'] = float(d.get('TRB'))
+                if d.get('STL'):
+                    d['STL'] = float(d.get('STL'))
+                if d.get('FT'):
+                    d['FT'] = float(d.get('FT'))
+                if d.get('FTA'):
+                    d['FTA'] = float(d.get('FTA'))
+                if d.get('FG3'):
+                    d['FG3'] = float(d.get('FG3'))
+                if d.get('FG') and d.get('FGA'):
+                    d['FG%'] = gen_derived_var(d.get('FG'), d.get('FGA'))
+                if d.get('FT') and d.get('FTA'):
+                    d['FT%'] = gen_derived_var(d.get('FT'), d.get('FTA'))
+                if d.get('3P') and d.get('3P'):
+                    d['3P%'] = gen_derived_var(d.get('3P'), d.get('3P'))
+                # if d.get('FG') and d.get('3P') and d.get('FGA'):
+                #     d['eFG%'] = gen_derived_var((d.get('FG') + 0.5 * d.get('3P')), d.get('FGA'))
+                # if d.get('FGA') and d.get('FTA'):
+                #     d['TSA'] = d.get('FGA') + 0.44 * d.get('FTA')
+                # if d.get('FT') and d.get('FTA'):
+                #     d['TS%'] = gen_derived_var(d.get('PTS'), 2*d.get('TSA'))
+                if d.get('FT') and d.get('FTA'):
+                    d['3PAr'] = gen_derived_var(d.get('3PA'), d.get('FGA'))
+                if d.get('FT') and d.get('FGA'):
+                    d['FTAr'] = gen_derived_var(d.get('FTA'), d.get('FGA'))
+                if d.get('FG') and d.get('3P'):
+                    d['2P'] = float(d.get('FG')) - float(d.get('3P'))
+                if d.get('FGA') and d.get('3PA'):
+                    d['2PA'] = float(d.get('FGA')) - float(d.get('3PA'))
+                if d.get('2P') and d.get('2P'):
+                    d['2P%'] = gen_derived_var(d.get('2P'), d.get('2P'))
+                if d.get('2PA') and d.get('FGA'):
+                    d['2PAr'] = gen_derived_var(d.get('2PA'), d.get('FGA'))
+                if d.get('ORB') and d.get('TRB'):
+                    d['DRB'] = float(d.get('TRB')) - float(d.get('ORB'))
+                if d.get('ORB') and d.get('TRB'):
+                    d['ORBr'] = gen_derived_var(d.get('ORB'), d.get('TRB'))
+                if d.get('DRB') and d.get('TRB'):
+                    d['DRBr'] = gen_derived_var(d.get('DRB'), d.get('TRB'))
+                if d.get('AST') and d.get('TOV'):
+                    d['AST/TOV'] = gen_derived_var(d.get('AST'), d.get('TOV'))
+                if d.get('STL') and d.get('TOV'):
+                    d['STL/TOV'] = gen_derived_var(d.get('STL'), d.get('TOV'))
+                # if d.get('PTS') and d.get('ORB') and d.get('DRB') and d.get('AST') and d.get('STL') and d.get('BLK') and d.get('FTA') and d.get('TOV') and d.get('PF'):
+                #     d['FIC'] = (d.get('PTS') + d.get('ORB') + 0.75 * d.get('DRB') + d.get('AST') + d.get('STL') +
+                #                 d.get('BLK') - 0.75 * d.get('BLK') - 0.375 * d.get('FTA') - d.get('TOV') - 0.5 * d.get('PF'))
+                if d.get('FT') and d.get('FGA'):
+                    d['FT/FGA'] = gen_derived_var(d.get('FT'), d.get('FGA'))
+                # if d.get('FG') and d.get('AST') and team_stats.get('FG'):
+                #     d['HOB'] = gen_derived_var(d.get('FG') + d.get('AST'), team_stats.get('FG'))
+                return d
 
             # derive players and teams stats
             for player_stats in self.match_[team]['players'].values():
@@ -306,6 +394,12 @@ class BRefMatch:
             add_derivated_stats_to_dict(team_stats, 'team')
 
     def _write_match(self):
+        self.country = re.sub(r'[^\x00-\x7F]','',self.country).decode('utf-8','ignore').strip()
+        self.league = re.sub(r'[^\x00-\x7F]','',self.league).decode('utf-8','ignore').strip()
+        self.season = re.sub(r'[^\x00-\x7F]','',self.season).decode('utf-8','ignore').strip()
+        self.code = re.sub(r'[^\x00-\x7F]','',self.code).decode('utf-8','ignore').strip()
+
+        # logger.info("game data: {0}".format(self.match_))
         filename = './matches/{0}/{1}/{2}/{3}.json'.format(self.country, self.league, self.season, self.code)
         with open(filename, 'w') as f:
             f.write(json.dumps(self.match_))
